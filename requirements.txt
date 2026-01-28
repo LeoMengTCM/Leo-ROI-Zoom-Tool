@@ -1,0 +1,4 @@
+# Leo ROI Zoom Tool - 依赖项
+opencv-python>=4.5.0
+numpy>=1.19.0
+pillow>=8.0.0
