@@ -18,3 +18,19 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Distribution packages
+*.zip
+*.dmg
+*.exe
+*.app
+
+# Virtual Environment
+venv/
+env/
+ENV/

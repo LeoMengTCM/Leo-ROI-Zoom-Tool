@@ -2,7 +2,7 @@
 Leo ROI Zoom Tool - 核心处理模块
 
 作者: Leo Meng (Linghan Meng)
-版本: 1.0
+版本: 2.0
 功能: 图像模板匹配、比例尺绘制、标注、水印等
 """
 

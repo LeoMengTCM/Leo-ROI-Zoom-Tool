@@ -3,7 +3,7 @@
 Leo ROI Zoom Tool - 科研图像局部放大图制作工具
 
 作者: Leo Meng (Linghan Meng)
-版本: 1.0
+版本: 2.0
 功能: 自动识别ROI区域，生成带引导线的局部放大组合图
 特性: 比例尺、标注、水印、批量处理、实时预览、快捷键支持
 """
@@ -525,18 +525,10 @@ class ROIZoomGUI:
         self.left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 绑定鼠标滚轮（支持 macOS 和 Windows/Linux）
-        def _on_mousewheel(event):
-            if platform.system() == 'Darwin':
-                self.left_canvas.yview_scroll(int(-1 * event.delta), "units")
-            else:
-                self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        # macOS
-        self.left_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        # Linux
-        self.left_canvas.bind_all("<Button-4>", lambda e: self.left_canvas.yview_scroll(-1, "units"))
-        self.left_canvas.bind_all("<Button-5>", lambda e: self.left_canvas.yview_scroll(1, "units"))
+        # 绑定鼠标滚轮区域
+        # 左侧设置面板滚动绑定
+        self.left_canvas.bind('<Enter>', self._bind_left_scroll)
+        self.left_canvas.bind('<Leave>', self._unbind_left_scroll)
 
         # 右侧：预览
         right_frame = ttk.Frame(content_frame)
@@ -555,6 +547,31 @@ class ROIZoomGUI:
 
         # === 底部状态栏 ===
         self.create_status_bar(main_frame)
+
+    def _bind_left_scroll(self, event):
+        """绑定左侧面板滚动"""
+        if platform.system() == 'Darwin':
+            self.left_canvas.bind_all("<MouseWheel>", self._on_left_mousewheel)
+        else:
+            self.left_canvas.bind_all("<MouseWheel>", self._on_left_mousewheel)
+            self.left_canvas.bind_all("<Button-4>", lambda e: self.left_canvas.yview_scroll(-1, "units"))
+            self.left_canvas.bind_all("<Button-5>", lambda e: self.left_canvas.yview_scroll(1, "units"))
+
+    def _unbind_left_scroll(self, event):
+        """解绑左侧面板滚动"""
+        if platform.system() == 'Darwin':
+            self.left_canvas.unbind_all("<MouseWheel>")
+        else:
+            self.left_canvas.unbind_all("<MouseWheel>")
+            self.left_canvas.unbind_all("<Button-4>")
+            self.left_canvas.unbind_all("<Button-5>")
+
+    def _on_left_mousewheel(self, event):
+        """处理左侧面板滚动"""
+        if platform.system() == 'Darwin':
+            self.left_canvas.yview_scroll(int(-1 * event.delta), "units")
+        else:
+            self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def create_input_section(self, parent):
         """创建输入文件选择区域"""
@@ -1315,7 +1332,9 @@ class ROIZoomGUI:
         self.preview_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # 绑定点击事件
-        self.preview_canvas.bind('<Button-1>', self.on_canvas_click)
+        self.preview_canvas.bind('<Button-1>', self.on_left_down)
+        self.preview_canvas.bind('<B1-Motion>', self.on_left_drag)
+        self.preview_canvas.bind('<ButtonRelease-1>', self.on_canvas_click)  # Click triggered on release if not dragged
 
         # 绑定拖动事件
         self.preview_canvas.bind('<ButtonPress-2>', self.on_drag_start)  # 中键
@@ -1336,6 +1355,85 @@ class ROIZoomGUI:
         h_scrollbar.pack(fill=tk.X)
 
         self.preview_canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+
+        # 绑定预览区域滚动
+        self.preview_canvas.bind('<Enter>', self._bind_preview_scroll)
+        self.preview_canvas.bind('<Leave>', self._unbind_preview_scroll)
+        
+        # 拖拽状态
+        self._is_dragging = False
+        self._drag_start_x = 0
+        self._drag_start_y = 0
+
+    def on_left_down(self, event):
+        """左键按下"""
+        if self.adding_annotation:
+            # 如果是添加标注模式，不做任何事（等待释放时触发点击）
+            pass
+        else:
+            # 否则开始拖动
+            self._is_dragging = False  # 重置拖动标志
+            self._drag_start_x = event.x
+            self._drag_start_y = event.y
+            self.on_drag_start(event)
+
+    def on_left_drag(self, event):
+        """左键拖动"""
+        if self.adding_annotation:
+            # 添加标注模式下不支持拖动
+            return
+        
+        # 判断是否真的发生了移动（防抖动）
+        if not self._is_dragging:
+            if abs(event.x - self._drag_start_x) > 2 or abs(event.y - self._drag_start_y) > 2:
+                self._is_dragging = True
+        
+        if self._is_dragging:
+            self.on_drag_move(event)
+            self.preview_canvas.configure(cursor='fleur')
+
+    def _bind_preview_scroll(self, event):
+        """绑定预览面板滚动"""
+        # 注意：这里我们使用 bind_all 确保在画布区域内滚动生效，但仅当鼠标在画布上时
+        if platform.system() == 'Darwin':
+            self.preview_canvas.bind_all("<MouseWheel>", self._on_preview_mousewheel)
+        else:
+            self.preview_canvas.bind_all("<MouseWheel>", self._on_preview_mousewheel)
+            self.preview_canvas.bind_all("<Button-4>", lambda e: self.preview_canvas.yview_scroll(-1, "units"))
+            self.preview_canvas.bind_all("<Button-5>", lambda e: self.preview_canvas.yview_scroll(1, "units"))
+
+    def _unbind_preview_scroll(self, event):
+        """解绑预览面板滚动"""
+        if platform.system() == 'Darwin':
+            self.preview_canvas.unbind_all("<MouseWheel>")
+        else:
+            self.preview_canvas.unbind_all("<MouseWheel>")
+            self.preview_canvas.unbind_all("<Button-4>")
+            self.preview_canvas.unbind_all("<Button-5>")
+
+    def _on_preview_mousewheel(self, event):
+        """处理预览面板滚动"""
+        # 如果按住了 Command/Control 键，则由缩放处理程序处理（不在此处理）
+        state = event.state
+        # macOS Command键通常是 8 或 16 (取决于具体修饰键组合)
+        # Windows Control键是 4
+        is_ctrl_cmd = (state & 4) or (state & 8) or (state & 16)
+        
+        if is_ctrl_cmd:
+            return  # 交给 zoom handler
+
+        # 检查是否按住 Shift 键进行水平滚动
+        is_shift = (state & 1)
+        
+        if platform.system() == 'Darwin':
+            delta = int(-1 * event.delta)
+        else:
+            delta = int(-1 * (event.delta / 120))
+            
+        if is_shift:
+            self.preview_canvas.xview_scroll(delta, "units")
+        else:
+            self.preview_canvas.yview_scroll(delta, "units")
 
         # 初始提示文字
         self.preview_canvas.create_text(
@@ -1616,6 +1714,68 @@ class ROIZoomGUI:
             new_zoom = max(current_zoom / 1.2, 10)
 
         self.set_preview_zoom(new_zoom)
+
+    def on_canvas_click(self, event):
+        """处理画布点击事件（释放时触发）"""
+        self.preview_canvas.configure(cursor='')  # Reset cursor
+        
+        # 如果刚才发生了拖拽，则忽略这次点击
+        if hasattr(self, '_is_dragging') and self._is_dragging:
+            self._is_dragging = False
+            return
+            
+        if not self.adding_annotation:
+            return
+
+        # 获取点击位置（相对于画布）
+        canvas_x = self.preview_canvas.canvasx(event.x)
+        canvas_y = self.preview_canvas.canvasy(event.y)
+
+        # 转换为图像坐标
+        if hasattr(self, 'preview_scale') and self.preview_scale:
+            img_x = int(canvas_x / self.preview_scale)
+            img_y = int(canvas_y / self.preview_scale)
+        else:
+            img_x = int(canvas_x)
+            img_y = int(canvas_y)
+
+        # 确定是在全景图还是放大图区域
+        if self.metadata:
+            pano_pos = self.metadata.get('pano_pos', (0, 0))
+            zoom_pos = self.metadata.get('zoom_pos', (0, 0))
+
+            # 简化处理：根据用户选择的目标
+            target = self.annotation_target.get()
+
+            if target == 'panorama':
+                rel_x = img_x - pano_pos[0]
+                rel_y = img_y - pano_pos[1]
+            else:
+                rel_x = img_x - zoom_pos[0]
+                rel_y = img_y - zoom_pos[1]
+
+            # 创建标注
+            annotation = {
+                'type': self.current_annotation_tool.get(),
+                'position': (rel_x, rel_y),
+                'target': target,
+                'color': self.annotation_color,
+                'size': self.annotation_size.get(),
+                'direction': self.annotation_direction.get(),
+                'text': self.annotation_text.get() if self.current_annotation_tool.get() == 'text' else None,
+            }
+
+            self.save_state()
+            self.annotations.append(annotation)
+            self.update_annotation_listbox()
+
+            # 退出添加模式
+            self.adding_annotation = False
+            self.preview_canvas.configure(cursor='')
+            self.update_status()
+
+            # 重新生成预览
+            self.debouncer.trigger()
 
     def save_image(self):
         """打开导出对话框"""
