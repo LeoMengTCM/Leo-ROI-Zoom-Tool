@@ -34,6 +34,16 @@ pip install opencv-python numpy pillow
 python roi_zoom_gui.py
 ```
 
+## 实际使用截图
+
+下图为项目核心流程生成的真实拼图结果示例（由 `demo_panorama.png` 与 `demo_zoom.png` 生成）：
+
+![实际使用截图](docs/screenshots/usage-example.png)
+
+示例输入文件位于：
+- `docs/screenshots/demo_panorama.png`
+- `docs/screenshots/demo_zoom.png`
+
 ## 快捷键
 
 | 快捷键 | 功能 |
@@ -52,8 +62,9 @@ python roi_zoom_gui.py
 ## 文件说明
 
 - `roi_zoom_gui.py` - 图形界面主程序
-- `roi_zoom_tool_v2.py` - 核心处理模块
+- `roi_zoom_tool.py` - 核心处理模块
 - `.roi_zoom_config.json` - 配置文件（自动生成）
+- `docs/screenshots/` - README 示例图资源目录
 
 ## 许可证
 

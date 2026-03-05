@@ -568,4 +568,4 @@ def create_zoom_figure(
 
 
 if __name__ == '__main__':
-    print("ROI Zoom Tool V2 - 请使用 GUI 版本")
+    print("ROI Zoom Tool - 请使用 GUI 版本")

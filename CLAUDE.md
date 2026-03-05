@@ -20,7 +20,7 @@ python roi_zoom_gui.py
 
 ### Two-Module Structure
 
-**roi_zoom_tool_v2.py** - Core processing module
+**roi_zoom_tool.py** - Core processing module
 - `find_roi_position()`: OpenCV template matching to locate zoom region in panorama
 - `create_zoom_figure()`: Main function that composites panorama + zoom with guide lines
 - `draw_scale_bar()`: Renders scale bars with multiple styles (line/ends/ticks)

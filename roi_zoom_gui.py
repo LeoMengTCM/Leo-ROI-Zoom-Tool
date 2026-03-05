@@ -19,8 +19,8 @@ import platform
 from pathlib import Path
 from copy import deepcopy
 
-# 导入V2核心功能
-from roi_zoom_tool_v2 import create_zoom_figure, draw_scale_bar, draw_annotation, draw_watermark
+# 导入核心功能
+from roi_zoom_tool import create_zoom_figure, draw_scale_bar, draw_annotation, draw_watermark
 
 # 配置文件路径
 CONFIG_FILE = Path(__file__).parent / '.roi_zoom_config.json'
@@ -96,7 +96,7 @@ class HistoryManager:
         return self.current_index < len(self.history) - 1
 
     def undo_count(self):
-        return self.current_index
+        return max(self.current_index, 0)
 
     def clear(self):
         self.history = []
@@ -250,6 +250,9 @@ class ROIZoomGUI:
         # 更新状态栏
         self.update_status()
 
+        # 关闭窗口时清理临时文件和定时任务
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
     def setup_styles(self):
         """设置界面样式"""
         style = ttk.Style()
@@ -367,6 +370,22 @@ class ROIZoomGUI:
         self.adding_annotation = False
         self.preview_canvas.configure(cursor='')
         self.update_status("操作已取消")
+
+    def _cleanup_temp_output(self):
+        """清理预览生成时的临时文件"""
+        if self.temp_output_path and os.path.exists(self.temp_output_path):
+            try:
+                os.remove(self.temp_output_path)
+            except OSError:
+                pass
+        self.temp_output_path = None
+
+    def on_close(self):
+        """应用关闭处理"""
+        if self.debouncer:
+            self.debouncer.cancel()
+        self._cleanup_temp_output()
+        self.root.destroy()
 
     def update_status(self, message=None):
         """更新状态栏"""
@@ -1059,61 +1078,6 @@ class ROIZoomGUI:
         self.preview_canvas.configure(cursor='crosshair')
         self.update_status("点击预览图添加标注，按Escape取消")
 
-    def on_canvas_click(self, event):
-        """处理画布点击事件"""
-        if not self.adding_annotation:
-            return
-
-        # 获取点击位置（相对于画布）
-        canvas_x = self.preview_canvas.canvasx(event.x)
-        canvas_y = self.preview_canvas.canvasy(event.y)
-
-        # 转换为图像坐标
-        if hasattr(self, 'preview_scale') and self.preview_scale:
-            img_x = int(canvas_x / self.preview_scale)
-            img_y = int(canvas_y / self.preview_scale)
-        else:
-            img_x = int(canvas_x)
-            img_y = int(canvas_y)
-
-        # 确定是在全景图还是放大图区域
-        if self.metadata:
-            pano_pos = self.metadata.get('pano_pos', (0, 0))
-            zoom_pos = self.metadata.get('zoom_pos', (0, 0))
-
-            # 简化处理：根据用户选择的目标
-            target = self.annotation_target.get()
-
-            if target == 'panorama':
-                rel_x = img_x - pano_pos[0]
-                rel_y = img_y - pano_pos[1]
-            else:
-                rel_x = img_x - zoom_pos[0]
-                rel_y = img_y - zoom_pos[1]
-
-            # 创建标注
-            annotation = {
-                'type': self.current_annotation_tool.get(),
-                'position': (rel_x, rel_y),
-                'target': target,
-                'color': self.annotation_color,
-                'size': self.annotation_size.get(),
-                'direction': self.annotation_direction.get(),
-                'text': self.annotation_text.get() if self.current_annotation_tool.get() == 'text' else None,
-            }
-
-            self.save_state()
-            self.annotations.append(annotation)
-            self.update_annotation_listbox()
-
-            # 退出添加模式
-            self.adding_annotation = False
-            self.preview_canvas.configure(cursor='')
-            self.update_status()
-
-            # 重新生成预览
-            self.debouncer.trigger()
-
     def update_annotation_listbox(self):
         """更新标注列表显示"""
         self.annotation_listbox.delete(0, tk.END)
@@ -1365,6 +1329,17 @@ class ROIZoomGUI:
         self._drag_start_x = 0
         self._drag_start_y = 0
 
+        # 初始提示文字
+        self.preview_canvas.create_text(
+            200, 150,
+            text="生成的图像将在此处预览\n\n请先选择全景图和放大图，\n然后点击\"生成预览\"按钮",
+            font=('Helvetica', 12),
+            fill='#666666',
+            justify=tk.CENTER
+        )
+        self.preview_canvas.configure(scrollregion=(0, 0, 400, 300))
+        self.preview_scale = 1.0
+
     def on_left_down(self, event):
         """左键按下"""
         if self.adding_annotation:
@@ -1434,18 +1409,6 @@ class ROIZoomGUI:
             self.preview_canvas.xview_scroll(delta, "units")
         else:
             self.preview_canvas.yview_scroll(delta, "units")
-
-        # 初始提示文字
-        self.preview_canvas.create_text(
-            200, 150,
-            text="生成的图像将在此处预览\n\n请先选择全景图和放大图，\n然后点击\"生成预览\"按钮",
-            font=('Helvetica', 12),
-            fill='#666666',
-            justify=tk.CENTER
-        )
-
-        # 初始化预览缩放比例
-        self.preview_scale = 1.0
 
     def select_panorama(self):
         """选择全景图文件"""
@@ -1524,8 +1487,11 @@ class ROIZoomGUI:
         self.root.update()
 
         try:
+            self._cleanup_temp_output()
+
             # 创建临时输出文件
-            self.temp_output_path = tempfile.mktemp(suffix='.png')
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                self.temp_output_path = tmp_file.name
 
             # 准备比例尺参数 - 全景图
             pano_scale_bar_config = None
@@ -1588,7 +1554,7 @@ class ROIZoomGUI:
                     'color': self.watermark_color,
                 }
 
-            # 调用V2核心函数
+            # 调用核心函数
             result = create_zoom_figure(
                 panorama_path=self.panorama_path.get(),
                 zoom_path=self.zoom_path.get(),
@@ -1610,7 +1576,7 @@ class ROIZoomGUI:
                 watermark=watermark_config,
             )
 
-            # V2返回元组 (image, metadata)
+            # 返回元组 (image, metadata)
             if isinstance(result, tuple):
                 self.result_image, self.metadata = result
             else:
@@ -1628,6 +1594,7 @@ class ROIZoomGUI:
             messagebox.showerror("生成失败", f"生成图像时出错:\n{str(e)}")
             self.update_status("生成失败")
         finally:
+            self._cleanup_temp_output()
             self.generate_btn.configure(state=tk.NORMAL)
 
     def show_preview(self, image, zoom_percent=None):
@@ -1982,6 +1949,10 @@ class BatchProcessDialog:
         self.gui = gui_instance
         self.file_pairs = []  # [(panorama_path, zoom_path), ...]
         self.processing = False
+        self._process_job = None
+        self._current_index = 0
+        self._success = 0
+        self._failed = 0
 
         # 创建对话框窗口
         self.dialog = tk.Toplevel(parent)
@@ -1989,12 +1960,16 @@ class BatchProcessDialog:
         self.dialog.geometry("700x600")
         self.dialog.minsize(600, 500)
         self.dialog.transient(parent)
+        self.dialog.protocol("WM_DELETE_WINDOW", self.close_dialog)
 
         # 变量
         self.output_dir = tk.StringVar()
         self.naming_pattern = tk.StringVar(value='{name}_zoom')
         self.output_format = tk.StringVar(value='PNG')
         self.auto_match_pattern = tk.StringVar(value='suffix')
+        self.regex_pattern = tk.StringVar(
+            value=r'^(?P<name>.+?)_(?P<type>pano|panorama|overview|zoom|detail|magnif\w*)$'
+        )
 
         self.create_widgets()
 
@@ -2051,7 +2026,15 @@ class BatchProcessDialog:
         ]
         for text, value in patterns:
             ttk.Radiobutton(match_frame, text=text, value=value,
-                            variable=self.auto_match_pattern).pack(side=tk.LEFT, padx=10)
+                            variable=self.auto_match_pattern,
+                            command=self.on_match_pattern_change).pack(side=tk.LEFT, padx=10)
+
+        self.regex_frame = ttk.Frame(match_frame)
+        self.regex_label = ttk.Label(self.regex_frame, text="正则: ")
+        self.regex_label.pack(side=tk.LEFT, pady=(8, 0))
+        self.regex_entry = ttk.Entry(self.regex_frame, textvariable=self.regex_pattern, width=55)
+        self.regex_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=(8, 0))
+        self.on_match_pattern_change()
 
         # 输出设置
         output_frame = ttk.LabelFrame(main_frame, text="输出设置", padding="10")
@@ -2100,7 +2083,14 @@ class BatchProcessDialog:
         self.cancel_btn = ttk.Button(btn_frame, text="取消", command=self.cancel_processing, state=tk.DISABLED)
         self.cancel_btn.pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(btn_frame, text="关闭", command=self.dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="关闭", command=self.close_dialog).pack(side=tk.RIGHT, padx=5)
+
+    def on_match_pattern_change(self):
+        """切换匹配模式时更新扩展设置显示"""
+        if self.auto_match_pattern.get() == 'regex':
+            self.regex_frame.pack(fill=tk.X)
+        else:
+            self.regex_frame.pack_forget()
 
     def add_pair_manual(self):
         """手动添加文件对"""
@@ -2172,6 +2162,38 @@ class BatchProcessDialog:
                 if key in zoom_files:
                     pairs.append((str(pano_files[key]), str(zoom_files[key])))
 
+        elif pattern == 'regex':
+            regex_text = self.regex_pattern.get().strip()
+            if not regex_text:
+                messagebox.showwarning("警告", "请输入正则表达式")
+                return
+
+            try:
+                compiled = re.compile(regex_text, re.IGNORECASE)
+            except re.error as err:
+                messagebox.showwarning("正则错误", f"正则表达式无效:\n{err}")
+                return
+
+            pano_files = {}
+            zoom_files = {}
+            for f in files:
+                match = compiled.search(f.stem)
+                if not match:
+                    continue
+
+                key, kind = self._extract_regex_match(match)
+                if not key or not kind:
+                    continue
+
+                if kind in {'pano', 'panorama', 'overview', 'low', 'lowmag'}:
+                    pano_files[key] = f
+                elif kind in {'zoom', 'detail', 'high', 'highmag'} or kind.startswith('magnif'):
+                    zoom_files[key] = f
+
+            for key in pano_files:
+                if key in zoom_files:
+                    pairs.append((str(pano_files[key]), str(zoom_files[key])))
+
         if pairs:
             for pano, zoom in pairs:
                 self.file_pairs.append((pano, zoom))
@@ -2179,6 +2201,25 @@ class BatchProcessDialog:
             messagebox.showinfo("导入完成", f"成功匹配 {len(pairs)} 对图像")
         else:
             messagebox.showwarning("匹配失败", "未能自动匹配任何图像对，请尝试手动添加")
+
+    def _extract_regex_match(self, match):
+        """从正则匹配结果中提取配对键和图像类型"""
+        group_dict = match.groupdict()
+
+        key = None
+        kind = None
+        if group_dict:
+            key = group_dict.get('name') or group_dict.get('base') or group_dict.get('id')
+            kind = group_dict.get('type') or group_dict.get('kind') or group_dict.get('role')
+
+        if (not key or not kind) and match.lastindex and match.lastindex >= 2:
+            key = key or match.group(1)
+            kind = kind or match.group(2)
+
+        if not key or not kind:
+            return None, None
+
+        return key.strip().lower(), kind.strip().lower()
 
     def remove_selected(self):
         """删除选中的文件对"""
@@ -2211,84 +2252,130 @@ class BatchProcessDialog:
             return
 
         self.processing = True
+        self._current_index = 0
+        self._success = 0
+        self._failed = 0
+
+        self.progress_var.set(0)
+        self.progress_label.configure(text=f"处理中: 0/{len(self.file_pairs)}")
+
+        for item in self.tree.get_children():
+            self.tree.set(item, 'status', '待处理')
+
         self.start_btn.configure(state=tk.DISABLED)
         self.cancel_btn.configure(state=tk.NORMAL)
+        self._process_job = self.dialog.after(10, self._process_next_file)
 
-        # 在后台线程处理
-        import threading
-        thread = threading.Thread(target=self.process_files)
-        thread.start()
+    def _process_next_file(self):
+        """逐个处理文件，避免在子线程访问 Tk 组件"""
+        self._process_job = None
 
-    def process_files(self):
-        """处理所有文件"""
+        if not self.processing:
+            return
+
         total = len(self.file_pairs)
-        success = 0
-        failed = 0
+        if self._current_index >= total:
+            self._finish_processing(cancelled=False)
+            return
+
+        i = self._current_index
+        pano, zoom = self.file_pairs[i]
+
+        progress = (i / total) * 100 if total else 0
+        self.progress_var.set(progress)
+        self.progress_label.configure(text=f"处理中: {i+1}/{total}")
+
+        items = self.tree.get_children()
+        item = items[i] if i < len(items) else None
+        if item:
+            self.tree.set(item, 'status', '处理中...')
+        self.dialog.update_idletasks()
 
         ext_map = {'PNG': '.png', 'JPEG': '.jpg', 'TIFF': '.tif'}
         ext = ext_map.get(self.output_format.get(), '.png')
 
-        for i, (pano, zoom) in enumerate(self.file_pairs):
-            if not self.processing:
-                break
+        try:
+            # 生成输出文件名
+            name = Path(pano).stem
+            output_name = self.naming_pattern.get().replace('{name}', name) + ext
+            output_path = Path(self.output_dir.get()) / output_name
 
-            # 更新进度
-            progress = (i / total) * 100
-            self.progress_var.set(progress)
-            self.progress_label.configure(text=f"处理中: {i+1}/{total}")
+            # 调用核心函数
+            create_zoom_figure(
+                panorama_path=pano,
+                zoom_path=zoom,
+                output_path=str(output_path),
+                box_color=self.gui.color_var,
+                box_thickness=self.gui.box_thickness_var.get(),
+                line_color=self.gui.color_var,
+                line_thickness=self.gui.line_thickness_var.get(),
+                zoom_position=self.gui.position_var.get(),
+                padding=self.gui.padding_var.get(),
+                zoom_box_color=self.gui.color_var,
+                zoom_box_thickness=self.gui.box_thickness_var.get(),
+                line_style=self.gui.line_style_var.get(),
+                dash_length=self.gui.dash_length_var.get(),
+                gap_length=self.gui.gap_length_var.get(),
+            )
 
-            # 更新树状态
-            item = self.tree.get_children()[i]
-            self.tree.set(item, 'status', '处理中...')
-            self.dialog.update()
-
-            try:
-                # 生成输出文件名
-                name = Path(pano).stem
-                output_name = self.naming_pattern.get().replace('{name}', name) + ext
-                output_path = Path(self.output_dir.get()) / output_name
-
-                # 调用核心函数
-                result = create_zoom_figure(
-                    panorama_path=pano,
-                    zoom_path=zoom,
-                    output_path=str(output_path),
-                    box_color=self.gui.color_var,
-                    box_thickness=self.gui.box_thickness_var.get(),
-                    line_color=self.gui.color_var,
-                    line_thickness=self.gui.line_thickness_var.get(),
-                    zoom_position=self.gui.position_var.get(),
-                    padding=self.gui.padding_var.get(),
-                    zoom_box_color=self.gui.color_var,
-                    zoom_box_thickness=self.gui.box_thickness_var.get(),
-                    line_style=self.gui.line_style_var.get(),
-                    dash_length=self.gui.dash_length_var.get(),
-                    gap_length=self.gui.gap_length_var.get(),
-                )
-
+            if item:
                 self.tree.set(item, 'status', '完成')
-                success += 1
+            self._success += 1
 
-            except Exception as e:
+        except Exception as e:
+            if item:
                 self.tree.set(item, 'status', f'失败: {str(e)[:20]}')
-                failed += 1
+            self._failed += 1
 
-        # 完成
-        self.progress_var.set(100)
-        self.progress_label.configure(text=f"完成: 成功 {success}, 失败 {failed}")
+        self._current_index += 1
+        if self.processing:
+            self._process_job = self.dialog.after(10, self._process_next_file)
+
+    def _finish_processing(self, cancelled=False):
+        """结束批处理并更新界面状态"""
         self.processing = False
         self.start_btn.configure(state=tk.NORMAL)
         self.cancel_btn.configure(state=tk.DISABLED)
 
-        if failed == 0:
-            messagebox.showinfo("处理完成", f"成功处理 {success} 个文件")
+        total = len(self.file_pairs)
+        processed = self._current_index
+
+        if cancelled:
+            progress = (processed / total) * 100 if total else 0
+            self.progress_var.set(progress)
+            self.progress_label.configure(text=f"已取消: 成功 {self._success}, 失败 {self._failed}")
+            return
+
+        self.progress_var.set(100 if total else 0)
+        self.progress_label.configure(text=f"完成: 成功 {self._success}, 失败 {self._failed}")
+
+        if self._failed == 0:
+            messagebox.showinfo("处理完成", f"成功处理 {self._success} 个文件")
         else:
-            messagebox.showwarning("处理完成", f"成功: {success}, 失败: {failed}")
+            messagebox.showwarning("处理完成", f"成功: {self._success}, 失败: {self._failed}")
 
     def cancel_processing(self):
         """取消处理"""
+        if not self.processing:
+            self.progress_label.configure(text="已取消")
+            return
+
         self.processing = False
-        self.progress_label.configure(text="已取消")
+        if self._process_job:
+            self.dialog.after_cancel(self._process_job)
+            self._process_job = None
+        self._finish_processing(cancelled=True)
+
+    def close_dialog(self):
+        """关闭对话框前取消待执行任务"""
+        self.processing = False
+        if self._process_job:
+            try:
+                self.dialog.after_cancel(self._process_job)
+            except tk.TclError:
+                pass
+            self._process_job = None
+        self.dialog.destroy()
 
 
 class RatioCalculatorDialog:
