@@ -70,7 +70,8 @@ def find_roi_position(panorama_path: str, zoom_path: str) -> tuple:
         new_w = int(zoom_w * scale)
         new_h = int(zoom_h * scale)
 
-        if new_w >= pano_w or new_h >= pano_h:
+        # OpenCV 允许模板尺寸与原图某一维相等（结果会是 1 像素宽/高）。
+        if new_w > pano_w or new_h > pano_h:
             continue
         if new_w < 10 or new_h < 10:
             continue
@@ -101,21 +102,26 @@ def draw_dashed_line(draw, start, end, color, width, dash_length=15, gap_length=
     if length == 0:
         return
 
+    # 防御性处理：非法参数不应导致死循环。
+    # - dash_length <= 0: 回退为最小可见虚线段
+    # - gap_length < 0: 负间隔没有意义，按 0 处理
+    dash_length = int(dash_length)
+    gap_length = int(gap_length)
+    if dash_length <= 0:
+        dash_length = 1
+    if gap_length < 0:
+        gap_length = 0
+
     ux = dx / length
     uy = dy / length
-    current_pos = 0
-    drawing = True
+    current_pos = 0.0
 
     while current_pos < length:
-        if drawing:
-            seg_length = min(dash_length, length - current_pos)
-            seg_start = (x1 + ux * current_pos, y1 + uy * current_pos)
-            seg_end = (x1 + ux * (current_pos + seg_length), y1 + uy * (current_pos + seg_length))
-            draw.line([seg_start, seg_end], fill=color, width=width)
-            current_pos += dash_length
-        else:
-            current_pos += gap_length
-        drawing = not drawing
+        seg_end_pos = min(current_pos + dash_length, length)
+        seg_start = (x1 + ux * current_pos, y1 + uy * current_pos)
+        seg_end = (x1 + ux * seg_end_pos, y1 + uy * seg_end_pos)
+        draw.line([seg_start, seg_end], fill=color, width=width)
+        current_pos = seg_end_pos + gap_length
 
 
 def draw_scale_bar(draw, position, length_pixels, length_um, color=(0, 0, 0),
@@ -353,6 +359,10 @@ def create_zoom_figure(
     padding: int = 50,
     zoom_box_color: tuple = (255, 0, 0),
     zoom_box_thickness: int = 3,
+    pano_border_enabled: bool = True,
+    roi_box_enabled: bool = True,
+    zoom_border_enabled: bool = True,
+    guide_lines_enabled: bool = True,
     line_style: str = 'solid',
     dash_length: int = 15,
     gap_length: int = 10,
@@ -387,7 +397,12 @@ def create_zoom_figure(
     zoom_w, zoom_h = zoom_img.size
 
     # 边框边距
-    margin = max(box_thickness, zoom_box_thickness) + 5
+    border_widths = []
+    if pano_border_enabled or zoom_border_enabled:
+        border_widths.append(zoom_box_thickness)
+    if roi_box_enabled:
+        border_widths.append(box_thickness)
+    margin = max(border_widths, default=0) + 5
 
     # 计算画布尺寸
     if zoom_position == 'right':
@@ -424,11 +439,12 @@ def create_zoom_figure(
     pano_border_x2 = pano_pos[0] + pano_w
     pano_border_y2 = pano_pos[1] + pano_h
 
-    for i in range(zoom_box_thickness):
-        draw.rectangle(
-            [pano_border_x1 - i, pano_border_y1 - i, pano_border_x2 + i, pano_border_y2 + i],
-            outline=zoom_box_color
-        )
+    if pano_border_enabled:
+        for i in range(zoom_box_thickness):
+            draw.rectangle(
+                [pano_border_x1 - i, pano_border_y1 - i, pano_border_x2 + i, pano_border_y2 + i],
+                outline=zoom_box_color
+            )
 
     # 在全景图上画选框
     box_x1 = pano_pos[0] + x
@@ -436,11 +452,12 @@ def create_zoom_figure(
     box_x2 = box_x1 + w
     box_y2 = box_y1 + h
 
-    for i in range(box_thickness):
-        draw.rectangle(
-            [box_x1 - i, box_y1 - i, box_x2 + i, box_y2 + i],
-            outline=box_color
-        )
+    if roi_box_enabled:
+        for i in range(box_thickness):
+            draw.rectangle(
+                [box_x1 - i, box_y1 - i, box_x2 + i, box_y2 + i],
+                outline=box_color
+            )
 
     # 在放大图周围画边框
     zoom_box_x1 = zoom_pos[0]
@@ -448,11 +465,12 @@ def create_zoom_figure(
     zoom_box_x2 = zoom_pos[0] + zoom_w
     zoom_box_y2 = zoom_pos[1] + zoom_h
 
-    for i in range(zoom_box_thickness):
-        draw.rectangle(
-            [zoom_box_x1 - i, zoom_box_y1 - i, zoom_box_x2 + i, zoom_box_y2 + i],
-            outline=zoom_box_color
-        )
+    if zoom_border_enabled:
+        for i in range(zoom_box_thickness):
+            draw.rectangle(
+                [zoom_box_x1 - i, zoom_box_y1 - i, zoom_box_x2 + i, zoom_box_y2 + i],
+                outline=zoom_box_color
+            )
 
     # 画引导线
     def draw_guide_line(start, end):
@@ -461,18 +479,19 @@ def create_zoom_figure(
         else:
             draw.line([start, end], fill=line_color, width=line_thickness)
 
-    if zoom_position == 'right':
-        draw_guide_line((box_x2, box_y1), (zoom_box_x1, zoom_box_y1))
-        draw_guide_line((box_x2, box_y2), (zoom_box_x1, zoom_box_y2))
-    elif zoom_position == 'left':
-        draw_guide_line((box_x1, box_y1), (zoom_box_x2, zoom_box_y1))
-        draw_guide_line((box_x1, box_y2), (zoom_box_x2, zoom_box_y2))
-    elif zoom_position == 'bottom':
-        draw_guide_line((box_x1, box_y2), (zoom_box_x1, zoom_box_y1))
-        draw_guide_line((box_x2, box_y2), (zoom_box_x2, zoom_box_y1))
-    else:  # top
-        draw_guide_line((box_x1, box_y1), (zoom_box_x1, zoom_box_y2))
-        draw_guide_line((box_x2, box_y1), (zoom_box_x2, zoom_box_y2))
+    if guide_lines_enabled:
+        if zoom_position == 'right':
+            draw_guide_line((box_x2, box_y1), (zoom_box_x1, zoom_box_y1))
+            draw_guide_line((box_x2, box_y2), (zoom_box_x1, zoom_box_y2))
+        elif zoom_position == 'left':
+            draw_guide_line((box_x1, box_y1), (zoom_box_x2, zoom_box_y1))
+            draw_guide_line((box_x1, box_y2), (zoom_box_x2, zoom_box_y2))
+        elif zoom_position == 'bottom':
+            draw_guide_line((box_x1, box_y2), (zoom_box_x1, zoom_box_y1))
+            draw_guide_line((box_x2, box_y2), (zoom_box_x2, zoom_box_y1))
+        else:  # top
+            draw_guide_line((box_x1, box_y1), (zoom_box_x1, zoom_box_y2))
+            draw_guide_line((box_x2, box_y1), (zoom_box_x2, zoom_box_y2))
 
     # 绘制比例尺（支持单个或多个）
     def draw_single_scale_bar(sb_config):
@@ -487,6 +506,7 @@ def create_zoom_figure(
         sb_color = sb_config.get('color', (0, 0, 0))
         sb_thickness = sb_config.get('thickness', 5)
         sb_font_size = sb_config.get('font_size', 24)
+        sb_show_text = sb_config.get('show_text', True)
         sb_style = sb_config.get('style', 'ends')
         sb_font_family = sb_config.get('font_family', 'Arial')
         sb_text_gap = sb_config.get('text_gap', 5)
@@ -507,7 +527,8 @@ def create_zoom_figure(
             sb_y = zoom_pos[1] + zoom_h - sb_offset_y
 
         draw_scale_bar(draw, (sb_x, sb_y), sb_length_pixels, sb_length_um,
-                      sb_color, sb_thickness, sb_font_size, style=sb_style, font_family=sb_font_family, text_gap=sb_text_gap)
+                      sb_color, sb_thickness, sb_font_size, show_text=sb_show_text,
+                      style=sb_style, font_family=sb_font_family, text_gap=sb_text_gap)
 
     if scale_bar:
         if isinstance(scale_bar, list):

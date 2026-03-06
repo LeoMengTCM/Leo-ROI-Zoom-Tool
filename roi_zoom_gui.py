@@ -57,50 +57,46 @@ class HistoryManager:
     """历史记录管理器（撤销/重做）"""
     def __init__(self, max_history=20):
         self.max_history = max_history
-        self.history = []
-        self.current_index = -1
+        self.undo_stack = []
+        self.redo_stack = []
 
     def push(self, state):
         """保存状态"""
-        # 删除当前位置之后的历史
-        if self.current_index < len(self.history) - 1:
-            self.history = self.history[:self.current_index + 1]
+        self.undo_stack.append(deepcopy(state))
+        if len(self.undo_stack) > self.max_history:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
 
-        # 添加新状态
-        self.history.append(deepcopy(state))
-
-        # 限制历史长度
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
-        else:
-            self.current_index += 1
-
-    def undo(self):
+    def undo(self, current_state):
         """撤销"""
         if self.can_undo():
-            self.current_index -= 1
-            return deepcopy(self.history[self.current_index])
+            previous_state = self.undo_stack.pop()
+            self.redo_stack.append(deepcopy(current_state))
+            return deepcopy(previous_state)
         return None
 
-    def redo(self):
+    def redo(self, current_state):
         """重做"""
         if self.can_redo():
-            self.current_index += 1
-            return deepcopy(self.history[self.current_index])
+            next_state = self.redo_stack.pop()
+            self.undo_stack.append(deepcopy(current_state))
+            if len(self.undo_stack) > self.max_history:
+                self.undo_stack.pop(0)
+            return deepcopy(next_state)
         return None
 
     def can_undo(self):
-        return self.current_index > 0
+        return len(self.undo_stack) > 0
 
     def can_redo(self):
-        return self.current_index < len(self.history) - 1
+        return len(self.redo_stack) > 0
 
     def undo_count(self):
-        return max(self.current_index, 0)
+        return len(self.undo_stack)
 
     def clear(self):
-        self.history = []
-        self.current_index = -1
+        self.undo_stack = []
+        self.redo_stack = []
 
 
 class CollapsiblePanel(ttk.Frame):
@@ -166,6 +162,14 @@ class ROIZoomGUI:
         self.line_style_var = tk.StringVar(value='solid')  # 实线/虚线
         self.dash_length_var = tk.IntVar(value=15)
         self.gap_length_var = tk.IntVar(value=10)
+
+        # 元素显示控制
+        self.show_pano_border = tk.BooleanVar(value=True)
+        self.show_roi_box = tk.BooleanVar(value=True)
+        self.show_zoom_border = tk.BooleanVar(value=True)
+        self.show_guide_lines = tk.BooleanVar(value=True)
+        self.show_scale_bar_text = tk.BooleanVar(value=True)
+        self.show_annotations = tk.BooleanVar(value=True)
 
         # ROI偏移量
         self.roi_offset_x = tk.IntVar(value=0)
@@ -309,7 +313,7 @@ class ROIZoomGUI:
 
     def undo(self):
         """撤销操作"""
-        state = self.history.undo()
+        state = self.history.undo(self._capture_state())
         if state:
             self.restore_state(state)
             self.update_status()
@@ -317,18 +321,24 @@ class ROIZoomGUI:
 
     def redo(self):
         """重做操作"""
-        state = self.history.redo()
+        state = self.history.redo(self._capture_state())
         if state:
             self.restore_state(state)
             self.update_status()
             self.auto_preview()
 
-    def save_state(self):
-        """保存当前状态到历史"""
-        state = {
+    def _capture_state(self):
+        """捕获当前可撤销状态"""
+        return {
             'roi_offset_x': self.roi_offset_x.get(),
             'roi_offset_y': self.roi_offset_y.get(),
             'annotations': deepcopy(self.annotations),
+            'show_pano_border': self.show_pano_border.get(),
+            'show_roi_box': self.show_roi_box.get(),
+            'show_zoom_border': self.show_zoom_border.get(),
+            'show_guide_lines': self.show_guide_lines.get(),
+            'show_scale_bar_text': self.show_scale_bar_text.get(),
+            'show_annotations': self.show_annotations.get(),
             'pano_scale_bar_enabled': self.pano_scale_bar_enabled.get(),
             'pano_scale_bar_length_um': self.pano_scale_bar_length_um.get(),
             'pano_scale_bar_pixels_per_um': self.pano_scale_bar_pixels_per_um.get(),
@@ -338,6 +348,10 @@ class ROIZoomGUI:
             'watermark_enabled': self.watermark_enabled.get(),
             'watermark_text': self.watermark_text.get(),
         }
+
+    def save_state(self):
+        """保存当前状态到历史"""
+        state = self._capture_state()
         self.history.push(state)
         self.update_status()
 
@@ -346,6 +360,12 @@ class ROIZoomGUI:
         self.roi_offset_x.set(state.get('roi_offset_x', 0))
         self.roi_offset_y.set(state.get('roi_offset_y', 0))
         self.annotations = deepcopy(state.get('annotations', []))
+        self.show_pano_border.set(state.get('show_pano_border', True))
+        self.show_roi_box.set(state.get('show_roi_box', True))
+        self.show_zoom_border.set(state.get('show_zoom_border', True))
+        self.show_guide_lines.set(state.get('show_guide_lines', True))
+        self.show_scale_bar_text.set(state.get('show_scale_bar_text', True))
+        self.show_annotations.set(state.get('show_annotations', True))
         self.pano_scale_bar_enabled.set(state.get('pano_scale_bar_enabled', False))
         self.pano_scale_bar_length_um.set(state.get('pano_scale_bar_length_um', 100))
         self.pano_scale_bar_pixels_per_um.set(state.get('pano_scale_bar_pixels_per_um', 1.0))
@@ -354,6 +374,8 @@ class ROIZoomGUI:
         self.zoom_scale_bar_pixels_per_um.set(state.get('zoom_scale_bar_pixels_per_um', 1.0))
         self.watermark_enabled.set(state.get('watermark_enabled', False))
         self.watermark_text.set(state.get('watermark_text', ''))
+        if hasattr(self, '_update_scale_bar_position_widget_states'):
+            self._update_scale_bar_position_widget_states()
         # 更新标注列表显示
         if hasattr(self, 'annotation_listbox'):
             self.update_annotation_listbox()
@@ -409,6 +431,129 @@ class ROIZoomGUI:
             if os.path.exists(self.panorama_path.get()) and os.path.exists(self.zoom_path.get()):
                 self.generate_preview()
 
+    def _sync_zoom_scale_bar_position_from_pano(self):
+        """在位置联动模式下同步放大图比例尺位置参数"""
+        self.zoom_scale_bar_pos_x.set(self.pano_scale_bar_pos_x.get())
+        self.zoom_scale_bar_offset_x.set(self.pano_scale_bar_offset_x.get())
+        self.zoom_scale_bar_offset_y.set(self.pano_scale_bar_offset_y.get())
+
+    def _update_scale_bar_position_widget_states(self):
+        """根据是否独立设置更新放大图位置控件状态"""
+        independent = self.scale_bar_sync_position.get()
+        state = 'normal' if independent else 'disabled'
+        for widget in getattr(self, 'zoom_scale_bar_position_widgets', []):
+            widget.configure(state=state)
+
+    def _get_scale_bar_position_settings(self, target):
+        """获取比例尺位置设置"""
+        if target == 'zoom' and self.scale_bar_sync_position.get():
+            pos_x = self.zoom_scale_bar_pos_x.get()
+            offset_x = self.zoom_scale_bar_offset_x.get()
+            offset_y = self.zoom_scale_bar_offset_y.get()
+        else:
+            pos_x = self.pano_scale_bar_pos_x.get()
+            offset_x = self.pano_scale_bar_offset_x.get()
+            offset_y = self.pano_scale_bar_offset_y.get()
+
+        return {
+            'corner': 'left' if pos_x == '左' else 'right',
+            'offset_x': offset_x,
+            'offset_y': offset_y,
+        }
+
+    def _build_scale_bar_configs(self):
+        """构建比例尺配置"""
+        scale_bars = []
+
+        if self.pano_scale_bar_enabled.get():
+            position = self._get_scale_bar_position_settings('panorama')
+            scale_bars.append({
+                'enabled': True,
+                'position': 'panorama',
+                'corner': position['corner'],
+                'offset_x': position['offset_x'],
+                'offset_y': position['offset_y'],
+                'length_um': self.pano_scale_bar_length_um.get(),
+                'pixels_per_um': self.pano_scale_bar_pixels_per_um.get(),
+                'color': self.pano_scale_bar_color,
+                'thickness': self.pano_scale_bar_thickness.get(),
+                'font_size': self.pano_scale_bar_font_size.get(),
+                'show_text': self.show_scale_bar_text.get(),
+                'style': self.scale_bar_style.get(),
+                'font_family': self.scale_bar_font_family.get(),
+                'text_gap': self.scale_bar_text_gap.get(),
+            })
+
+        if self.zoom_scale_bar_enabled.get():
+            position = self._get_scale_bar_position_settings('zoom')
+            scale_bars.append({
+                'enabled': True,
+                'position': 'zoom',
+                'corner': position['corner'],
+                'offset_x': position['offset_x'],
+                'offset_y': position['offset_y'],
+                'length_um': self.zoom_scale_bar_length_um.get(),
+                'pixels_per_um': self.zoom_scale_bar_pixels_per_um.get(),
+                'color': self.zoom_scale_bar_color,
+                'thickness': self.zoom_scale_bar_thickness.get(),
+                'font_size': self.zoom_scale_bar_font_size.get(),
+                'show_text': self.show_scale_bar_text.get(),
+                'style': self.scale_bar_style.get(),
+                'font_family': self.scale_bar_font_family.get(),
+                'text_gap': self.scale_bar_text_gap.get(),
+            })
+
+        if not scale_bars:
+            return None
+        if len(scale_bars) == 1:
+            return scale_bars[0]
+        return scale_bars
+
+    def _build_watermark_config(self):
+        """构建水印配置"""
+        if not (self.watermark_enabled.get() and self.watermark_text.get()):
+            return None
+
+        position = self.watermark_position.get()
+        if hasattr(self, 'watermark_position_map') and position in self.watermark_position_map:
+            position = self.watermark_position_map[position]
+
+        return {
+            'enabled': True,
+            'text': self.watermark_text.get(),
+            'position': position,
+            'opacity': self.watermark_opacity.get(),
+            'font_size': self.watermark_font_size.get(),
+            'color': self.watermark_color,
+        }
+
+    def _build_render_kwargs(self, panorama_path, zoom_path, output_path):
+        """构建 create_zoom_figure 参数"""
+        return {
+            'panorama_path': panorama_path,
+            'zoom_path': zoom_path,
+            'output_path': output_path,
+            'box_color': self.color_var,
+            'box_thickness': self.box_thickness_var.get(),
+            'line_color': self.color_var,
+            'line_thickness': self.line_thickness_var.get(),
+            'zoom_position': self.position_var.get(),
+            'padding': self.padding_var.get(),
+            'zoom_box_color': self.color_var,
+            'zoom_box_thickness': self.box_thickness_var.get(),
+            'pano_border_enabled': self.show_pano_border.get(),
+            'roi_box_enabled': self.show_roi_box.get(),
+            'zoom_border_enabled': self.show_zoom_border.get(),
+            'guide_lines_enabled': self.show_guide_lines.get(),
+            'line_style': self.line_style_var.get(),
+            'dash_length': self.dash_length_var.get(),
+            'gap_length': self.gap_length_var.get(),
+            'roi_offset': (self.roi_offset_x.get(), self.roi_offset_y.get()),
+            'scale_bar': self._build_scale_bar_configs(),
+            'annotations': deepcopy(self.annotations) if self.show_annotations.get() and self.annotations else None,
+            'watermark': self._build_watermark_config(),
+        }
+
     def load_config(self):
         """加载默认配置"""
         if CONFIG_FILE.exists():
@@ -424,6 +569,19 @@ class ROIZoomGUI:
                 self.dash_length_var.set(config.get('dash_length', 15))
                 self.gap_length_var.set(config.get('gap_length', 10))
 
+                visibility_config = config.get('visibility', {})
+                self.show_pano_border.set(visibility_config.get('pano_border', True))
+                self.show_roi_box.set(visibility_config.get('roi_box', True))
+                self.show_zoom_border.set(visibility_config.get('zoom_border', True))
+                self.show_guide_lines.set(visibility_config.get('guide_lines', True))
+                self.show_scale_bar_text.set(visibility_config.get('scale_bar_text', True))
+                self.show_annotations.set(visibility_config.get('annotations', True))
+
+                self.scale_bar_sync_position.set(config.get('scale_bar_sync_position', False))
+                self.scale_bar_style.set(config.get('scale_bar_style', 'line'))
+                self.scale_bar_font_family.set(config.get('scale_bar_font_family', 'Arial'))
+                self.scale_bar_text_gap.set(config.get('scale_bar_text_gap', 5))
+
                 # 比例尺配置 - 全景图
                 pano_sb_config = config.get('pano_scale_bar', {})
                 self.pano_scale_bar_enabled.set(pano_sb_config.get('enabled', False))
@@ -432,6 +590,9 @@ class ROIZoomGUI:
                 self.pano_scale_bar_thickness.set(pano_sb_config.get('thickness', 5))
                 self.pano_scale_bar_font_size.set(pano_sb_config.get('font_size', 24))
                 self.pano_scale_bar_color = tuple(pano_sb_config.get('color', [0, 0, 0]))
+                self.pano_scale_bar_pos_x.set(pano_sb_config.get('pos_x', '右'))
+                self.pano_scale_bar_offset_x.set(pano_sb_config.get('offset_x', 30))
+                self.pano_scale_bar_offset_y.set(pano_sb_config.get('offset_y', 30))
 
                 # 比例尺配置 - 放大图
                 zoom_sb_config = config.get('zoom_scale_bar', {})
@@ -441,6 +602,9 @@ class ROIZoomGUI:
                 self.zoom_scale_bar_thickness.set(zoom_sb_config.get('thickness', 5))
                 self.zoom_scale_bar_font_size.set(zoom_sb_config.get('font_size', 24))
                 self.zoom_scale_bar_color = tuple(zoom_sb_config.get('color', [0, 0, 0]))
+                self.zoom_scale_bar_pos_x.set(zoom_sb_config.get('pos_x', self.pano_scale_bar_pos_x.get()))
+                self.zoom_scale_bar_offset_x.set(zoom_sb_config.get('offset_x', self.pano_scale_bar_offset_x.get()))
+                self.zoom_scale_bar_offset_y.set(zoom_sb_config.get('offset_y', self.pano_scale_bar_offset_y.get()))
 
                 # 水印配置
                 watermark_config = config.get('watermark', {})
@@ -457,6 +621,9 @@ class ROIZoomGUI:
                 self.watermark_font_size.set(watermark_config.get('font_size', 24))
                 self.watermark_color = tuple(watermark_config.get('color', [128, 128, 128]))
 
+                if not self.scale_bar_sync_position.get():
+                    self._sync_zoom_scale_bar_position_from_pano()
+
             except Exception as e:
                 print(f"加载配置失败: {e}")
 
@@ -471,6 +638,18 @@ class ROIZoomGUI:
             'line_style': self.line_style_var.get(),
             'dash_length': self.dash_length_var.get(),
             'gap_length': self.gap_length_var.get(),
+            'visibility': {
+                'pano_border': self.show_pano_border.get(),
+                'roi_box': self.show_roi_box.get(),
+                'zoom_border': self.show_zoom_border.get(),
+                'guide_lines': self.show_guide_lines.get(),
+                'scale_bar_text': self.show_scale_bar_text.get(),
+                'annotations': self.show_annotations.get(),
+            },
+            'scale_bar_sync_position': self.scale_bar_sync_position.get(),
+            'scale_bar_style': self.scale_bar_style.get(),
+            'scale_bar_font_family': self.scale_bar_font_family.get(),
+            'scale_bar_text_gap': self.scale_bar_text_gap.get(),
             'pano_scale_bar': {
                 'enabled': self.pano_scale_bar_enabled.get(),
                 'length_um': self.pano_scale_bar_length_um.get(),
@@ -478,6 +657,9 @@ class ROIZoomGUI:
                 'thickness': self.pano_scale_bar_thickness.get(),
                 'font_size': self.pano_scale_bar_font_size.get(),
                 'color': list(self.pano_scale_bar_color),
+                'pos_x': self.pano_scale_bar_pos_x.get(),
+                'offset_x': self.pano_scale_bar_offset_x.get(),
+                'offset_y': self.pano_scale_bar_offset_y.get(),
             },
             'zoom_scale_bar': {
                 'enabled': self.zoom_scale_bar_enabled.get(),
@@ -486,6 +668,9 @@ class ROIZoomGUI:
                 'thickness': self.zoom_scale_bar_thickness.get(),
                 'font_size': self.zoom_scale_bar_font_size.get(),
                 'color': list(self.zoom_scale_bar_color),
+                'pos_x': self.zoom_scale_bar_pos_x.get(),
+                'offset_x': self.zoom_scale_bar_offset_x.get(),
+                'offset_y': self.zoom_scale_bar_offset_y.get(),
             },
             'watermark': {
                 'enabled': self.watermark_enabled.get(),
@@ -701,6 +886,32 @@ class ROIZoomGUI:
         self.color_preview.configure(bg=color_hex)
         self.color_hex_label.configure(text=color_hex.upper())
 
+        # 元素显示控制
+        visibility_frame = ttk.LabelFrame(params_frame, text="元素显示", padding="5")
+        visibility_frame.pack(fill=tk.X, pady=5)
+
+        visibility_options = [
+            ('全景外框', self.show_pano_border),
+            ('ROI选框', self.show_roi_box),
+            ('放大外框', self.show_zoom_border),
+            ('引导连线', self.show_guide_lines),
+            ('标尺文字', self.show_scale_bar_text),
+            ('标注', self.show_annotations),
+        ]
+        for index, (label, variable) in enumerate(visibility_options):
+            ttk.Checkbutton(
+                visibility_frame,
+                text=label,
+                variable=variable,
+                command=lambda: self.debouncer.trigger() if self.debouncer else None
+            ).grid(row=index // 2, column=index % 2, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(
+            visibility_frame,
+            text="比例尺整体可在下方比例尺面板分别启用/关闭",
+            foreground='#666666'
+        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=(4, 0))
+
         # 引导线样式
         style_frame = ttk.Frame(params_frame)
         style_frame.pack(fill=tk.X, pady=5)
@@ -833,11 +1044,14 @@ class ROIZoomGUI:
         ttk.Button(zoom_color_frame, text="选择", command=self.select_zoom_scale_bar_color).pack(side=tk.LEFT)
 
         # ===== 位置设置 =====
-        pos_frame = ttk.LabelFrame(content, text="位置设置（通用）", padding="5")
+        pos_frame = ttk.LabelFrame(content, text="位置设置", padding="5")
         pos_frame.pack(fill=tk.X, pady=5)
 
-        # 水平位置
-        pos_x_frame = ttk.Frame(pos_frame)
+        pano_pos_frame = ttk.LabelFrame(pos_frame, text="全景图", padding="5")
+        pano_pos_frame.pack(fill=tk.X, pady=(0, 5))
+
+        # 全景图 - 水平位置
+        pos_x_frame = ttk.Frame(pano_pos_frame)
         pos_x_frame.pack(fill=tk.X, pady=2)
         ttk.Label(pos_x_frame, text="水平:").pack(side=tk.LEFT)
         ttk.Radiobutton(pos_x_frame, text="左", value='左',
@@ -847,16 +1061,16 @@ class ROIZoomGUI:
                         variable=self.pano_scale_bar_pos_x,
                         command=self.on_scale_bar_pos_change).pack(side=tk.LEFT, padx=5)
 
-        # X偏移
-        offset_x_frame = ttk.Frame(pos_frame)
+        # 全景图 - X偏移
+        offset_x_frame = ttk.Frame(pano_pos_frame)
         offset_x_frame.pack(fill=tk.X, pady=2)
         ttk.Label(offset_x_frame, text="X偏移:").pack(side=tk.LEFT)
         ttk.Spinbox(offset_x_frame, from_=0, to=500, width=6,
                     textvariable=self.pano_scale_bar_offset_x,
                     command=self.on_scale_bar_pos_change).pack(side=tk.LEFT, padx=5)
 
-        # Y偏移（距底部）
-        offset_y_frame = ttk.Frame(pos_frame)
+        # 全景图 - Y偏移（距底部）
+        offset_y_frame = ttk.Frame(pano_pos_frame)
         offset_y_frame.pack(fill=tk.X, pady=2)
         ttk.Label(offset_y_frame, text="Y偏移(距底):").pack(side=tk.LEFT)
         ttk.Spinbox(offset_y_frame, from_=0, to=500, width=6,
@@ -869,6 +1083,53 @@ class ROIZoomGUI:
             variable=self.scale_bar_sync_position,
             command=self.on_scale_bar_sync_change
         ).pack(anchor=tk.W, pady=(5, 0))
+
+        zoom_pos_frame = ttk.LabelFrame(pos_frame, text="放大图", padding="5")
+        zoom_pos_frame.pack(fill=tk.X, pady=(5, 0))
+
+        zoom_pos_x_frame = ttk.Frame(zoom_pos_frame)
+        zoom_pos_x_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(zoom_pos_x_frame, text="水平:").pack(side=tk.LEFT)
+        self.zoom_pos_left_rb = ttk.Radiobutton(
+            zoom_pos_x_frame, text="左", value='左',
+            variable=self.zoom_scale_bar_pos_x,
+            command=self.on_zoom_scale_bar_pos_change
+        )
+        self.zoom_pos_left_rb.pack(side=tk.LEFT, padx=5)
+        self.zoom_pos_right_rb = ttk.Radiobutton(
+            zoom_pos_x_frame, text="右", value='右',
+            variable=self.zoom_scale_bar_pos_x,
+            command=self.on_zoom_scale_bar_pos_change
+        )
+        self.zoom_pos_right_rb.pack(side=tk.LEFT, padx=5)
+
+        zoom_offset_x_frame = ttk.Frame(zoom_pos_frame)
+        zoom_offset_x_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(zoom_offset_x_frame, text="X偏移:").pack(side=tk.LEFT)
+        self.zoom_offset_x_spinbox = ttk.Spinbox(
+            zoom_offset_x_frame, from_=0, to=500, width=6,
+            textvariable=self.zoom_scale_bar_offset_x,
+            command=self.on_zoom_scale_bar_pos_change
+        )
+        self.zoom_offset_x_spinbox.pack(side=tk.LEFT, padx=5)
+
+        zoom_offset_y_frame = ttk.Frame(zoom_pos_frame)
+        zoom_offset_y_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(zoom_offset_y_frame, text="Y偏移(距底):").pack(side=tk.LEFT)
+        self.zoom_offset_y_spinbox = ttk.Spinbox(
+            zoom_offset_y_frame, from_=0, to=500, width=6,
+            textvariable=self.zoom_scale_bar_offset_y,
+            command=self.on_zoom_scale_bar_pos_change
+        )
+        self.zoom_offset_y_spinbox.pack(side=tk.LEFT, padx=5)
+
+        self.zoom_scale_bar_position_widgets = [
+            self.zoom_pos_left_rb,
+            self.zoom_pos_right_rb,
+            self.zoom_offset_x_spinbox,
+            self.zoom_offset_y_spinbox,
+        ]
+        self._update_scale_bar_position_widget_states()
 
         # ===== 通用设置 =====
         common_frame = ttk.LabelFrame(content, text="通用设置", padding="5")
@@ -937,16 +1198,21 @@ class ROIZoomGUI:
 
     def on_scale_bar_sync_change(self):
         """比例尺同步选项变化"""
+        if not self.scale_bar_sync_position.get():
+            self._sync_zoom_scale_bar_position_from_pano()
+        self._update_scale_bar_position_widget_states()
         self.debouncer.trigger()
 
     def on_scale_bar_pos_change(self):
         """比例尺位置变化 - 默认同时调整两个"""
         if not self.scale_bar_sync_position.get():
-            # 同步到放大图
-            self.zoom_scale_bar_pos_x.set(self.pano_scale_bar_pos_x.get())
-            self.zoom_scale_bar_offset_x.set(self.pano_scale_bar_offset_x.get())
-            self.zoom_scale_bar_offset_y.set(self.pano_scale_bar_offset_y.get())
+            self._sync_zoom_scale_bar_position_from_pano()
         self.debouncer.trigger()
+
+    def on_zoom_scale_bar_pos_change(self):
+        """放大图比例尺位置变化"""
+        if self.scale_bar_sync_position.get():
+            self.debouncer.trigger()
 
     def select_pano_scale_bar_color(self):
         """选择全景图比例尺颜色"""
@@ -955,6 +1221,8 @@ class ROIZoomGUI:
         if color[0]:
             self.pano_scale_bar_color = tuple(int(c) for c in color[0])
             self.pano_scale_bar_color_preview.configure(bg=color[1])
+            if self.debouncer:
+                self.debouncer.trigger()
 
     def select_zoom_scale_bar_color(self):
         """选择放大图比例尺颜色"""
@@ -963,6 +1231,8 @@ class ROIZoomGUI:
         if color[0]:
             self.zoom_scale_bar_color = tuple(int(c) for c in color[0])
             self.zoom_scale_bar_color_preview.configure(bg=color[1])
+            if self.debouncer:
+                self.debouncer.trigger()
 
     def open_ratio_calculator(self, target):
         """打开像素/μm比例计算器"""
@@ -1067,6 +1337,8 @@ class ROIZoomGUI:
         if color[0]:
             self.annotation_color = tuple(int(c) for c in color[0])
             self.annotation_color_preview.configure(bg=color[1])
+            if self.debouncer:
+                self.debouncer.trigger()
 
     def start_adding_annotation(self):
         """开始添加标注模式"""
@@ -1180,6 +1452,8 @@ class ROIZoomGUI:
         if color[0]:
             self.watermark_color = tuple(int(c) for c in color[0])
             self.watermark_color_preview.configure(bg=color[1])
+            if self.debouncer:
+                self.debouncer.trigger()
 
     def create_status_bar(self, parent):
         """创建状态栏"""
@@ -1463,6 +1737,8 @@ class ROIZoomGUI:
             self.color_var = tuple(int(c) for c in color[0])
             self.color_preview.configure(bg=color[1])
             self.color_hex_label.configure(text=color[1].upper())
+            if self.debouncer:
+                self.debouncer.trigger()
 
     def generate_preview(self):
         """生成预览图像"""
@@ -1493,88 +1769,11 @@ class ROIZoomGUI:
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
                 self.temp_output_path = tmp_file.name
 
-            # 准备比例尺参数 - 全景图
-            pano_scale_bar_config = None
-            if self.pano_scale_bar_enabled.get():
-                pano_scale_bar_config = {
-                    'enabled': True,
-                    'position': 'panorama',
-                    'corner': 'left' if self.pano_scale_bar_pos_x.get() == '左' else 'right',
-                    'offset_x': self.pano_scale_bar_offset_x.get(),
-                    'offset_y': self.pano_scale_bar_offset_y.get(),
-                    'length_um': self.pano_scale_bar_length_um.get(),
-                    'pixels_per_um': self.pano_scale_bar_pixels_per_um.get(),
-                    'color': self.pano_scale_bar_color,
-                    'thickness': self.pano_scale_bar_thickness.get(),
-                    'font_size': self.pano_scale_bar_font_size.get(),
-                    'style': self.scale_bar_style.get(),
-                    'font_family': self.scale_bar_font_family.get(),
-                    'text_gap': self.scale_bar_text_gap.get(),
-                }
-
-            # 准备比例尺参数 - 放大图
-            zoom_scale_bar_config = None
-            if self.zoom_scale_bar_enabled.get():
-                zoom_scale_bar_config = {
-                    'enabled': True,
-                    'position': 'zoom',
-                    'corner': 'left' if self.zoom_scale_bar_pos_x.get() == '左' else 'right',
-                    'offset_x': self.zoom_scale_bar_offset_x.get(),
-                    'offset_y': self.zoom_scale_bar_offset_y.get(),
-                    'length_um': self.zoom_scale_bar_length_um.get(),
-                    'pixels_per_um': self.zoom_scale_bar_pixels_per_um.get(),
-                    'color': self.zoom_scale_bar_color,
-                    'thickness': self.pano_scale_bar_thickness.get(),  # 使用通用设置
-                    'font_size': self.pano_scale_bar_font_size.get(),  # 使用通用设置
-                    'style': self.scale_bar_style.get(),
-                    'font_family': self.scale_bar_font_family.get(),
-                    'text_gap': self.scale_bar_text_gap.get(),
-                }
-
-            # 合并比例尺配置为列表
-            scale_bars = []
-            if pano_scale_bar_config:
-                scale_bars.append(pano_scale_bar_config)
-            if zoom_scale_bar_config:
-                scale_bars.append(zoom_scale_bar_config)
-
-            # 准备水印参数
-            watermark_config = None
-            if self.watermark_enabled.get() and self.watermark_text.get():
-                # 处理位置映射
-                pos = self.watermark_position.get()
-                if hasattr(self, 'watermark_position_map') and pos in self.watermark_position_map:
-                    pos = self.watermark_position_map[pos]
-                watermark_config = {
-                    'enabled': True,
-                    'text': self.watermark_text.get(),
-                    'position': pos,
-                    'opacity': self.watermark_opacity.get(),
-                    'font_size': self.watermark_font_size.get(),
-                    'color': self.watermark_color,
-                }
-
-            # 调用核心函数
-            result = create_zoom_figure(
-                panorama_path=self.panorama_path.get(),
-                zoom_path=self.zoom_path.get(),
-                output_path=self.temp_output_path,
-                box_color=self.color_var,
-                box_thickness=self.box_thickness_var.get(),
-                line_color=self.color_var,
-                line_thickness=self.line_thickness_var.get(),
-                zoom_position=self.position_var.get(),
-                padding=self.padding_var.get(),
-                zoom_box_color=self.color_var,
-                zoom_box_thickness=self.box_thickness_var.get(),
-                line_style=self.line_style_var.get(),
-                dash_length=self.dash_length_var.get(),
-                gap_length=self.gap_length_var.get(),
-                roi_offset=(self.roi_offset_x.get(), self.roi_offset_y.get()),
-                scale_bar=scale_bars[0] if len(scale_bars) == 1 else (scale_bars if scale_bars else None),
-                annotations=self.annotations if self.annotations else None,
-                watermark=watermark_config,
-            )
+            result = create_zoom_figure(**self._build_render_kwargs(
+                self.panorama_path.get(),
+                self.zoom_path.get(),
+                self.temp_output_path,
+            ))
 
             # 返回元组 (image, metadata)
             if isinstance(result, tuple):
@@ -1871,6 +2070,9 @@ class ExportDialog:
 
         ttk.Button(self.btn_frame, text="导出", command=self.export).pack(side=tk.RIGHT, padx=5)
         ttk.Button(self.btn_frame, text="取消", command=self.dialog.destroy).pack(side=tk.RIGHT)
+
+        # 根据当前导出格式初始化质量面板显示状态
+        self.toggle_quality()
 
     def toggle_quality(self):
         """切换 JPEG 质量选项显示"""
@@ -2300,23 +2502,11 @@ class BatchProcessDialog:
             output_name = self.naming_pattern.get().replace('{name}', name) + ext
             output_path = Path(self.output_dir.get()) / output_name
 
-            # 调用核心函数
-            create_zoom_figure(
-                panorama_path=pano,
-                zoom_path=zoom,
-                output_path=str(output_path),
-                box_color=self.gui.color_var,
-                box_thickness=self.gui.box_thickness_var.get(),
-                line_color=self.gui.color_var,
-                line_thickness=self.gui.line_thickness_var.get(),
-                zoom_position=self.gui.position_var.get(),
-                padding=self.gui.padding_var.get(),
-                zoom_box_color=self.gui.color_var,
-                zoom_box_thickness=self.gui.box_thickness_var.get(),
-                line_style=self.gui.line_style_var.get(),
-                dash_length=self.gui.dash_length_var.get(),
-                gap_length=self.gui.gap_length_var.get(),
-            )
+            create_zoom_figure(**self.gui._build_render_kwargs(
+                pano,
+                zoom,
+                str(output_path),
+            ))
 
             if item:
                 self.tree.set(item, 'status', '完成')
